@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebRTC Local Test</title>
+  <style>
+    html, body {
+      padding: 0;
+      margin: 0;
+      font-family: sans-serif;
+    }
+
+    h1 {
+      margin-top: 0;
+      margin-bottom: 42px;;
+      background-color: #135aa0;
+      color: #fff;
+      padding: 42px;
+      font-size: 2rem;
+    }
+
+    .container {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-around;
+    }
+
+    video {
+      box-shadow: 0 0 5px #000;
+      background-color: #000;
+      border-radius: 5px;
+      margin: 20px;
+      max-width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebRTC <small>Local Test</small></h1>
+  <div class="container">
+    <video id="video-local"></video>
+    <video id="video-remote"></video>
+  </div>
+  <script>
+    const localVideo = document.getElementById('video-local');
+    const remoteVideo = document.getElementById('video-remote');
+
+    localVideo.addEventListener('loadedmetadata', (e) => e.target.play());
+    remoteVideo.addEventListener('loadedmetadata', (e) => e.target.play());
+
+    const hasGetUserMedia = () => {
+      return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    };
+
+    const showError = (message) => {
+      console.error(message);
+    };
+
+    const logInformation = (message) => {
+      console.info(message);
+    };
+
+    const setVideoStream = (videoElement, stream) => {
+      if ('srcObject' in videoElement) {
+        videoElement.srcObject = stream;
+      } else {
+        videoElement.src = window.URL.createObjectURL(stream);
+      }
+    };
+
+    const displayStreamInfos = (stream) => {
+      const videoTracks = stream.getVideoTracks();
+      const audioTracks = stream.getAudioTracks();
+      if (videoTracks.length > 0) {
+        logInformation(`using video device: ${videoTracks[0].label}`);
+      }
+      if (audioTracks.length > 0) {
+        logInformation(`using audio device: ${audioTracks[0].label}`);
+      }
+    }
+
+    const constraints = {
+      audio: true,
+      video: true,
+    };
+
+    const offerOptions = {
+      offerToReceiveAudio: 1,
+      offerToReceiveVideo: 1,
+    };
+
+    const receivedStats = {};
+
+    const rtcConfiguration = {};
+
+    let pc1, pc2, localStream;
+
+    const getOtherPc = (pc) => {
+      return pc === pc1 ? pc2 : pc1;
+    }
+
+    const onIceCandidate = async (pc, event) => {
+      await getOtherPc(pc).addIceCandidate(event.candidate);
+    }
+
+    const getRemoteStream = (e) => {
+      const stream = e.streams[0];
+      if (remoteVideo.srcObject !== stream) {
+        setVideoStream(remoteVideo, stream);
+      }
+    };
+
+    const updateStatsProperties = async () => {
+      const stats = await pc1.getStats(null);
+      stats.forEach((report) => {
+        const { type } = report;
+        if (!Object.prototype.hasOwnProperty.call(receivedStats, type)) {
+          receivedStats[type] = new Set();
+        }
+
+        Object.keys(report).forEach((key) => {
+          if (!['timestamp', 'type', 'id'].includes(key)) {
+            receivedStats[type].add(key);
+          }
+        });
+      });
+    };
+
+    const getStatsProperties = () => {
+      return Object.fromEntries(Object.entries(receivedStats).map((s) => {
+        s[1] = [...s[1]].sort();
+        return s;
+      }));
+    }
+
+    const startCall = async () => {
+      if (!hasGetUserMedia()) {
+        showError('getUserMedia is not supported by your browser');
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStream = stream;
+      setVideoStream(localVideo, stream);
+      displayStreamInfos(localStream);
+
+      pc1 = new RTCPeerConnection(rtcConfiguration);
+      pc2 = new RTCPeerConnection(rtcConfiguration);
+
+      pc1.addEventListener('icecandidate', (e) => onIceCandidate(pc1, e));
+      pc2.addEventListener('icecandidate', (e) => onIceCandidate(pc2, e));
+      pc2.addEventListener('track', getRemoteStream);
+
+      localStream.getTracks().forEach((track) => pc1.addTrack(track, localStream));
+
+      try {
+        const offer = await pc1.createOffer(offerOptions);
+        await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(offer);
+
+        const answer = await pc2.createAnswer();
+        await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(answer);
+      } catch (e) {
+        showError(e);
+        return;
+      }
+
+      window.setInterval(updateStatsProperties, 1_000);
+    };
+
+    startCall();
+  </script>
+</body>
+</html>
